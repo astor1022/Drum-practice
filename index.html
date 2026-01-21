@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>打點板：完整與空拍隨機訓練</title>
+    <style>
+        body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #f0f0f0; font-family: sans-serif; }
+        .container { 
+            width: 850px; height: 600px; border: 2px solid blue; background-color: white;
+            display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative;
+        }
+        .view { display: none; flex-direction: column; gap: 30px; align-items: center; }
+        .active { display: flex; }
+        .menu-btn { width: 250px; padding: 20px; border: 2px solid blue; background-color: white; color: blue; font-size: 24px; font-weight: bold; cursor: pointer; border-radius: 8px; text-align: center; }
+        .menu-btn:hover { background-color: #eef5ff; }
+        .back-btn { position: absolute; top: 20px; left: 20px; padding: 8px 15px; border: 2px solid gray; background-color: white; color: gray; font-size: 16px; cursor: pointer; border-radius: 5px; }
+        #score-container { width: 800px; height: 300px; border: 2px solid green; display: flex; justify-content: center; align-items: center; background-color: white; }
+        canvas { width: 750px; height: 250px; }
+        .generate-btn { margin-top: 30px; padding: 12px 40px; border: 2px solid red; background-color: white; color: red; font-size: 20px; font-weight: bold; cursor: pointer; border-radius: 8px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="mode-view" class="view active">
+            <h1 style="color:blue;">選擇練習模式</h1>
+            <div class="menu-btn" onclick="selectMode('drumset')">綜合基礎練習</div>
+            <div class="menu-btn" onclick="selectMode('pad')">打點板：綜合訓練</div>
+        </div>
+
+        <div id="diff-view" class="view">
+            <button class="back-btn" onclick="showView('mode-view')">返回</button>
+            <h1 style="color:blue;">選擇難度</h1>
+            <div class="menu-btn" onclick="startDrumset('easy')">初級</div>
+            <div class="menu-btn" onclick="startDrumset('medium')">中級</div>
+            <div class="menu-btn" onclick="startDrumset('hard')">困難</div>
+        </div>
+
+        <div id="score-view" class="view">
+            <button class="back-btn" onclick="goBackFromScore()">返回</button>
+            <div id="score-container"><canvas id="drumCanvas"></canvas></div>
+            <button class="generate-btn" onclick="renderScore()">重新生成鼓譜</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('drumCanvas');
+        const ctx = canvas.getContext('2d');
+        const dpr = window.devicePixelRatio || 1;
+
+        window.appState = { mode: 'drumset', difficulty: 'easy' };
+        const config = { lineGap: 16, staffWidth: 700, totalMeasures: 4, startX: 25, top: 80 };
+
+        const drumsetLibrary = {
+            easy: [{bd:[0],sd:[2]}, {bd:[0,2],sd:[2]}, {bd:[0],sd:[2],extra:[1]}],
+            medium: [{bd:[0,1],sd:[2]}, {bd:[0,3],sd:[2]}, {bd:[1,2],sd:[0,3]}],
+            hard: [{bd:[0,1,3],sd:[2]}, {bd:[0,2],sd:[1,3]}]
+        };
+
+        function showView(viewId) {
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.getElementById(viewId).classList.add('active');
+        }
+
+        function selectMode(m) { window.appState.mode = m; m === 'drumset' ? showView('diff-view') : startPad(); }
+        function startDrumset(diff) { window.appState.difficulty = diff; initScoreView(); }
+        function startPad() { window.appState.difficulty = 'pad'; initScoreView(); }
+
+        function initScoreView() {
+            showView('score-view');
+            canvas.width = 750 * dpr; canvas.height = 250 * dpr; ctx.scale(dpr, dpr);
+            renderScore();
+        }
+
+        function goBackFromScore() { window.appState.mode === 'drumset' ? showView('diff-view') : showView('mode-view'); }
+
+        function drawStaffLine() {
+            ctx.strokeStyle = '#000'; ctx.lineWidth = 1.2;
+            for (let i = 0; i < 5; i++) {
+                const y = config.top + i * config.lineGap;
+                ctx.beginPath(); ctx.moveTo(config.startX, y); ctx.lineTo(config.startX + config.staffWidth, y); ctx.stroke();
+            }
+            ctx.lineWidth = 2;
+            for (let i = 0; i <= config.totalMeasures; i++) {
+                const x = config.startX + i * (config.staffWidth / config.totalMeasures);
+                ctx.beginPath(); ctx.moveTo(x, config.top); ctx.lineTo(x, config.top + 4 * config.lineGap); ctx.stroke();
+            }
+        }
+
+        function drawNote(x, y, type, label = "") {
+            ctx.lineWidth = 2; ctx.strokeStyle = '#000'; ctx.fillStyle = '#000';
+            if (type === 'x') {
+                const s = 6; ctx.beginPath(); ctx.moveTo(x-s,y-s); ctx.lineTo(x+s,y+s); ctx.moveTo(x+s,y-s); ctx.lineTo(x-s,y+s); ctx.stroke();
+            } else {
+                ctx.beginPath(); ctx.ellipse(x, y, 7.5, 6, 0, 0, Math.PI * 2); ctx.fill();
+                const stemX = (type === 'sd') ? x+7.5 : x-7.5;
+                const stemY = (type === 'sd') ? y-30 : y+30;
+                ctx.beginPath(); ctx.lineWidth = 1.2; ctx.moveTo(stemX, y); ctx.lineTo(stemX, stemY); ctx.stroke();
+            }
+            if (label) { 
+                ctx.font = "bold 18px Arial"; ctx.textAlign = "center"; 
+                ctx.fillText(label, x, config.top + 5 * config.lineGap + 20); 
+            }
+        }
+
+        function renderScore() {
+            ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
+            drawStaffLine();
+            const { mode, difficulty } = window.appState;
+            const measureWidth = config.staffWidth / config.totalMeasures;
+            const noteGap = measureWidth / 4; 
+
+            for (let m = 0; m < 4; m++) {
+                // 決定本小節是否包含空拍 (50% 機率)
+                const hasRest = Math.random() > 0.5;
+                const restIndex = hasRest ? Math.floor(Math.random() * 4) : -1;
+                
+                let drumPattern = mode === 'drumset' ? drumsetLibrary[difficulty][Math.floor(Math.random() * drumsetLibrary[difficulty].length)] : null;
+
+                for (let n = 0; n < 4; n++) {
+                    const x = config.startX + m * measureWidth + (n + 0.5) * noteGap;
+                    
+                    if (mode === 'pad') {
+                        // 如果是空拍位置，直接跳過不畫
+                        if (n !== restIndex) {
+                            const stick = (n % 2 === 0) ? "R" : "L";
+                            drawNote(x, config.top + 2 * config.lineGap, 'sd', stick);
+                        }
+                    } else {
+                        drawNote(x, config.top, 'x');
+                        if (drumPattern.sd.includes(n)) drawNote(x, config.top + 2 * config.lineGap, 'sd');
+                        if (drumPattern.bd.includes(n)) drawNote(x, config.top + 3.5 * config.lineGap, 'bd');
+                    }
+                }
+            }
+        }
+    </script>
+</body>
+</html>
