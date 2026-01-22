@@ -2,8 +2,8 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="description" content="Drum-practice">
-    <title>Drum-practice</title>
+    <meta name="description" content="何閎駿的爵士鼓練習系統：具備微調按鈕與精準 BPM 控制的進階版。">
+    <title>DrumMaster | 精準節奏訓練</title>
     <style>
         body { display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; background-color: #f0f0f0; font-family: sans-serif; }
         .container { 
@@ -15,13 +15,36 @@
         .menu-btn { width: 250px; padding: 20px; border: 2px solid blue; background-color: white; color: blue; font-size: 24px; font-weight: bold; cursor: pointer; border-radius: 8px; text-align: center; }
         .menu-btn:hover { background-color: #eef5ff; }
         .back-btn { position: absolute; top: 20px; left: 20px; padding: 8px 15px; border: 2px solid gray; background-color: white; color: gray; font-size: 16px; cursor: pointer; border-radius: 5px; }
-        #score-container { width: 800px; height: 300px; border: 2px solid green; display: flex; justify-content: center; align-items: center; background-color: white; }
+        
+        #bpm-controls { 
+            display: none; position: absolute; top: 25px; right: 40px; 
+            flex-direction: row; align-items: center; gap: 10px;
+            background: rgba(255,255,255,0.9); padding: 8px 15px; border: 1px solid #ccc; border-radius: 5px; z-index: 10;
+        }
+        /* 微調按鈕樣式 */
+        .step-btn { width: 30px; height: 30px; border: 1px solid #ccc; background: white; cursor: pointer; font-size: 18px; font-weight: bold; display: flex; justify-content: center; align-items: center; border-radius: 4px; }
+        .step-btn:active { background: #eee; }
+        
+        #bpm-slider { width: 120px; cursor: pointer; margin: 0 5px; }
+        .bpm-value { font-weight: bold; color: red; font-size: 18px; min-width: 35px; text-align: center; }
+
+        #score-container { width: 800px; height: 320px; border: 2px solid green; display: flex; justify-content: center; align-items: center; background-color: white; position: relative; margin-top: 30px; }
         canvas { width: 750px; height: 250px; }
         .generate-btn { margin-top: 30px; padding: 12px 40px; border: 2px solid red; background-color: white; color: red; font-size: 20px; font-weight: bold; cursor: pointer; border-radius: 8px; }
+        .play-btn { background-color: #4CAF50; color: white; border: none; padding: 8px 15px; border-radius: 5px; cursor: pointer; font-size: 14px; margin-left: 10px; }
     </style>
 </head>
 <body>
     <div class="container">
+        <div id="bpm-controls">
+            <div style="font-size: 14px;">BPM:</div>
+            <button class="step-btn" onclick="adjustBPM(-1)">-</button>
+            <span class="bpm-value" id="bpm-display">100</span>
+            <button class="step-btn" onclick="adjustBPM(1)">+</button>
+            <input type="range" id="bpm-slider" min="40" max="160" value="100" step="1">
+            <button class="play-btn" id="metronome-toggle" onclick="toggleMetronome()">開啟節拍器</button>
+        </div>
+
         <div id="mode-view" class="view active">
             <h1 style="color:blue;">選擇練習模式</h1>
             <div class="menu-btn" onclick="selectMode('drumset')">綜合基礎練習</div>
@@ -29,7 +52,7 @@
         </div>
 
         <div id="diff-view" class="view">
-            <button class="back-btn" onclick="showView('mode-view')">返回</button>
+            <button class="back-btn" onclick="showView('mode-view'); hideBPM();">返回</button>
             <h1 style="color:blue;">選擇難度</h1>
             <div class="menu-btn" onclick="startDrumset('easy')">初級</div>
             <div class="menu-btn" onclick="startDrumset('medium')">中級</div>
@@ -39,7 +62,7 @@
         <div id="score-view" class="view">
             <button class="back-btn" onclick="goBackFromScore()">返回</button>
             <div id="score-container"><canvas id="drumCanvas"></canvas></div>
-            <button class="generate-btn" onclick="renderScore()">重新生成鼓譜</button>
+            <button class="generate-btn" onclick="generateNewPatterns()">重新生成鼓譜</button>
         </div>
     </div>
 
@@ -47,10 +70,74 @@
         const canvas = document.getElementById('drumCanvas');
         const ctx = canvas.getContext('2d');
         const dpr = window.devicePixelRatio || 1;
+        const bpmSlider = document.getElementById('bpm-slider');
+        const bpmDisplay = document.getElementById('bpm-display');
+        const bpmPanel = document.getElementById('bpm-controls');
 
-        window.appState = { mode: 'drumset', difficulty: 'easy' };
+        window.appState = { mode: 'drumset', difficulty: 'easy', isPlaying: false, bpm: 100 };
+
         const config = { lineGap: 16, staffWidth: 700, totalMeasures: 4, startX: 25, top: 80 };
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        let nextTickTime = 0;
+        let timerID = null;
+        let currentPatterns = []; 
+        let currentRests = [];
 
+        // 監聽滑桿，移除強制吸附，回歸純粹的 1 單位調整
+        bpmSlider.oninput = function() {
+            updateBPM(parseInt(this.value));
+        };
+
+        // 新增：微調按鈕功能
+        function adjustBPM(delta) {
+            let newVal = window.appState.bpm + delta;
+            if (newVal >= 40 && newVal <= 160) {
+                bpmSlider.value = newVal;
+                updateBPM(newVal);
+            }
+        }
+
+        function updateBPM(val) {
+            bpmDisplay.innerText = val;
+            window.appState.bpm = val;
+        }
+
+        function playTick() {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'triangle'; 
+            osc.frequency.setValueAtTime(880, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.1);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.1);
+        }
+
+        function scheduler() {
+            while (nextTickTime < audioCtx.currentTime + 0.1) {
+                playTick();
+                nextTickTime += 60.0 / window.appState.bpm;
+            }
+            timerID = window.setTimeout(scheduler, 25.0);
+        }
+
+        function toggleMetronome() {
+            if (!window.appState.isPlaying) {
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                nextTickTime = audioCtx.currentTime;
+                window.appState.isPlaying = true;
+                document.getElementById('metronome-toggle').innerText = "關閉節拍器";
+                scheduler();
+            } else {
+                window.appState.isPlaying = false;
+                window.clearTimeout(timerID);
+                document.getElementById('metronome-toggle').innerText = "開啟節拍器";
+            }
+        }
+
+        // --- 鼓譜邏輯 ---
         const drumsetLibrary = {
             easy: [{bd:[0],sd:[2]}, {bd:[0,2],sd:[2]}, {bd:[0],sd:[2],extra:[1]}],
             medium: [{bd:[0,1],sd:[2]}, {bd:[0,3],sd:[2]}, {bd:[1,2],sd:[0,3]}],
@@ -68,11 +155,16 @@
 
         function initScoreView() {
             showView('score-view');
+            bpmPanel.style.display = 'flex';
             canvas.width = 750 * dpr; canvas.height = 250 * dpr; ctx.scale(dpr, dpr);
-            renderScore();
+            generateNewPatterns();
         }
 
-        function goBackFromScore() { window.appState.mode === 'drumset' ? showView('diff-view') : showView('mode-view'); }
+        function goBackFromScore() { 
+            bpmPanel.style.display = 'none'; 
+            if(window.appState.isPlaying) toggleMetronome();
+            window.appState.mode === 'drumset' ? showView('diff-view') : showView('mode-view'); 
+        }
 
         function drawStaffLine() {
             ctx.strokeStyle = '#000'; ctx.lineWidth = 1.2;
@@ -97,35 +189,33 @@
                 const stemY = (type === 'sd') ? y-30 : y+30;
                 ctx.beginPath(); ctx.lineWidth = 1.2; ctx.moveTo(stemX, y); ctx.lineTo(stemX, stemY); ctx.stroke();
             }
-            if (label) { 
-                ctx.font = "bold 18px Arial"; ctx.textAlign = "center"; 
-                ctx.fillText(label, x, config.top + 5 * config.lineGap + 20); 
-            }
+            if (label) { ctx.font = "bold 18px Arial"; ctx.textAlign = "center"; ctx.fillText(label, x, config.top + 5 * config.lineGap + 20); }
         }
 
-        function renderScore() {
+        function generateNewPatterns() {
+            currentPatterns = [];
+            currentRests = [];
+            for (let m = 0; m < 4; m++) {
+                currentRests.push(Math.random() > 0.5 ? Math.floor(Math.random() * 4) : -1);
+                const lib = drumsetLibrary[window.appState.difficulty];
+                currentPatterns.push(window.appState.mode === 'drumset' ? lib[Math.floor(Math.random() * lib.length)] : null);
+            }
+            drawStaticScore();
+        }
+
+        function drawStaticScore() {
             ctx.clearRect(0, 0, canvas.width / dpr, canvas.height / dpr);
             drawStaffLine();
-            const { mode, difficulty } = window.appState;
             const measureWidth = config.staffWidth / config.totalMeasures;
-            const noteGap = measureWidth / 4; 
-
+            const noteGap = measureWidth / 4;
+            if (currentPatterns.length === 0) return;
             for (let m = 0; m < 4; m++) {
-                // 決定本小節是否包含空拍 (50% 機率)
-                const hasRest = Math.random() > 0.5;
-                const restIndex = hasRest ? Math.floor(Math.random() * 4) : -1;
-                
-                let drumPattern = mode === 'drumset' ? drumsetLibrary[difficulty][Math.floor(Math.random() * drumsetLibrary[difficulty].length)] : null;
-
+                const restIndex = currentRests[m];
+                const drumPattern = currentPatterns[m];
                 for (let n = 0; n < 4; n++) {
                     const x = config.startX + m * measureWidth + (n + 0.5) * noteGap;
-                    
-                    if (mode === 'pad') {
-                        // 如果是空拍位置，直接跳過不畫
-                        if (n !== restIndex) {
-                            const stick = (n % 2 === 0) ? "R" : "L";
-                            drawNote(x, config.top + 2 * config.lineGap, 'sd', stick);
-                        }
+                    if (window.appState.mode === 'pad') {
+                        if (n !== restIndex) drawNote(x, config.top + 2 * config.lineGap, 'sd', (n % 2 === 0) ? "R" : "L");
                     } else {
                         drawNote(x, config.top, 'x');
                         if (drumPattern.sd.includes(n)) drawNote(x, config.top + 2 * config.lineGap, 'sd');
@@ -136,6 +226,4 @@
         }
     </script>
 </body>
-
 </html>
-
